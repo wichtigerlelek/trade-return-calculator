@@ -26,8 +26,8 @@ A tiny trade simulator written in Go that visualizes the long-term outcome of a 
 **Prerequisites:** Go 1.21+
 
 ```bash
-git clone https://github.com/yourusername/trade-simulator
-cd trade-simulator
+git clone https://github.com/wichtigerlelek/trade-return-calculator.git
+cd trade-return-calculator
 go mod tidy
 go run .
 ```
