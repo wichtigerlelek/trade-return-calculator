@@ -1,0 +1,14 @@
+# Generated chart
+chart.html
+
+# Go executables
+*.exe
+trade-simulator
+main
+
+# Go build cache
+*.test
+*.out
+
+# Environment files
+.env
