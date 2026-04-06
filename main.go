@@ -48,6 +48,18 @@ func monteCarlo(startBalance float64, numTrades int, numSims int, risk float64, 
 		charts.WithTooltipOpts(opts.Tooltip{
 			Show:    opts.Bool(true),
 			Trigger: "axis",
+			Formatter: opts.FuncOpts(`
+        function(params) {
+            params.sort(function(a, b) {
+                return b.value - a.value;
+            });
+            var result = params[0].axisValueLabel + '<br/>';
+            params.forEach(function(item) {
+                result += item.marker + item.seriesName + ': ' + item.value.toFixed(2) + '<br/>';
+            });
+            return result;
+			}
+			`),
 		}),
 		charts.WithYAxisOpts(opts.YAxis{
 			Name: "Balance",
@@ -189,7 +201,7 @@ func initialModel() model {
 		fields: []field{
 			{label: "Start Balance", default_: "10000"},
 			{label: "Number of Trades", default_: "2000"},
-			{label: "Simulations", default_: "25"},
+			{label: "Simulations", default_: "20"},
 			{label: "Typical Risk", default_: "0.05"},
 			{label: "Risk-Reward", default_: "1.0"},
 			{label: "Win Rate", default_: "0.58"},
@@ -334,7 +346,7 @@ func main() {
 
 	startBalance := m.getFloat(0, 10000.0)
 	numberOfTrades := m.getInt(1, 2000)
-	numSimulations := m.getInt(2, 25)
+	numSimulations := m.getInt(2, 20)
 	typicalRisk := m.getFloat(3, 0.05)
 	riskReward := m.getFloat(4, 1.0)
 	winRate := m.getFloat(5, 0.58)
