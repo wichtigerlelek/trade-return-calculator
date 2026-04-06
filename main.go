@@ -26,7 +26,48 @@ func generateLineItems(data []float64) []opts.LineData {
 	return items
 }
 
-func monteCarlo(startBalance float64, numTrades int, numSims int, risk float64, rr float64, wr float64) *charts.Line {
+func runSimulation(startBalance float64, numTrades int, riskPct float64, rr float64, baseWr float64, maxRiskAmt float64, slippage float64) []float64 {
+	history := make([]float64, numTrades+1)
+	currentBalance := startBalance
+	history[0] = currentBalance
+	currentWR := baseWr
+
+	for i := 1; i <= numTrades; i++ {
+		// Every 50 trades, the WR "drifts" by +/- 2%
+		if i%50 == 0 {
+			drift := (rand.Float64() * 0.04) - 0.02
+			currentWR = baseWr + drift
+		}
+
+		currentBalance = calculateTrade(currentBalance, riskPct, maxRiskAmt, rr, currentWR, slippage)
+
+		if currentBalance < 0 {
+			currentBalance = 0
+		}
+
+		history[i] = currentBalance
+	}
+	return history
+}
+
+func calculateTrade(balance float64, riskPct float64, maxRiskAmt float64, rr float64, wr float64, slippage float64) float64 {
+	riskAmount := balance * riskPct
+	if riskAmount > maxRiskAmt {
+		riskAmount = maxRiskAmt
+	}
+
+	tradeWon := rand.Float64() <= wr
+
+	if tradeWon {
+		balance += (riskAmount * (rr - slippage))
+	} else {
+		balance -= (riskAmount * (1 + slippage))
+	}
+
+	return balance
+}
+
+func monteCarlo(startBalance float64, numTrades int, numSims int, risk float64, rr float64, baseWr float64, maxRisk float64, slippage float64) *charts.Line {
 	xAxis := make([]int, numTrades+1)
 	for i := 0; i < numTrades+1; i++ {
 		xAxis[i] = i
@@ -77,56 +118,41 @@ func monteCarlo(startBalance float64, numTrades int, numSims int, risk float64, 
 		yAxis := make([]float64, numTrades+1)
 		yAxis[0] = currentBalance
 
+		currentWR := baseWr
+
 		for i := 1; i < numTrades+1; i++ {
-			tradeWon := rand.Float64() <= wr
-			if tradeWon {
-				currentBalance += currentBalance * risk * rr
-			} else {
-				currentBalance -= currentBalance * risk
+			// Every 50 trades, the WR "drifts" by +/- 2%
+			if i%50 == 0 {
+				drift := (rand.Float64() * 0.04) - 0.02
+				currentWR = baseWr + drift
+			}
+
+			currentBalance = calculateTrade(currentBalance, risk, maxRisk, rr, currentWR, slippage)
+
+			if currentBalance <= 0 {
+				currentBalance = 0
 			}
 			yAxis[i] = currentBalance
 		}
 
 		line.AddSeries(fmt.Sprintf("Sim %d", sim+1), generateLineItems(yAxis),
-			charts.WithLineChartOpts(opts.LineChart{
-				Symbol: "none",
-			}),
-			charts.WithLineStyleOpts(opts.LineStyle{
-				Width: 1,
-			}),
+			charts.WithLineChartOpts(opts.LineChart{Symbol: "none"}),
 		)
 	}
 
-	line.SetSeriesOptions(
-		charts.WithMarkLineNameYAxisItemOpts(
-			opts.MarkLineNameYAxisItem{
-				Name:  "Start Balance",
-				YAxis: startBalance,
-			},
-		),
-		charts.WithMarkLineStyleOpts(opts.MarkLineStyle{
-			Symbol: []string{"none", "none"},
-		}),
-	)
 	return line
 }
 
-func percentile(startBalance float64, numTrades int, numSims int, risk float64, rr float64, wr float64) *charts.Line {
+func percentile(startBalance float64, numTrades int, numSims int, risk float64, rr float64, wr float64, maxRisk float64, slippage float64) *charts.Line {
 	allResults := make([][]float64, numTrades+1)
 	for i := range allResults {
 		allResults[i] = make([]float64, numSims)
 	}
 
 	for s := 0; s < numSims; s++ {
-		curr := startBalance
-		allResults[0][s] = curr
-		for t := 1; t <= numTrades; t++ {
-			if rand.Float64() <= wr {
-				curr *= (1 + risk*rr)
-			} else {
-				curr *= (1 - risk)
-			}
-			allResults[t][s] = curr
+		simHistory := runSimulation(startBalance, numTrades, risk, rr, wr, maxRisk, slippage)
+		for t := 0; t <= numTrades; t++ {
+			allResults[t][s] = simHistory[t]
 		}
 	}
 
@@ -202,9 +228,11 @@ func initialModel() model {
 			{label: "Start Balance", default_: "10000"},
 			{label: "Number of Trades", default_: "2000"},
 			{label: "Simulations", default_: "20"},
-			{label: "Typical Risk", default_: "0.05"},
+			{label: "Risk Per Trade", default_: "0.02"},
 			{label: "Risk-Reward", default_: "1.0"},
-			{label: "Win Rate", default_: "0.58"},
+			{label: "Win Rate", default_: "0.55"},
+			{label: "Max $ Risk Cap", default_: "50000"},
+			{label: "Slippage", default_: "0.005"},
 		},
 	}
 }
@@ -254,10 +282,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 func (m model) View() string {
 	var sb strings.Builder
-	sb.WriteString("╔══════════════════════════════════╗\n")
-	sb.WriteString("║       Trade Simulator Setup      ║\n")
-	sb.WriteString("╚══════════════════════════════════╝\n\n")
-	sb.WriteString("  Use ↑↓ to navigate, Enter to confirm\n\n")
+	sb.WriteString("╔═════════════════════════════════╗\n")
+	sb.WriteString("║     TRADE RETURN CALCULATOR     ║\n")
+	sb.WriteString("╚═════════════════════════════════╝\n\n")
 
 	for i, f := range m.fields {
 		cursor := "  "
@@ -270,10 +297,24 @@ func (m model) View() string {
 			display = f.default_
 		}
 
+		prefix := ""
+		// Use Contains instead of exact match to be safer with your labels
+		if strings.Contains(f.label, "Balance") || strings.Contains(f.label, "Cap") {
+			prefix = "$"
+		} else if strings.Contains(f.label, "Reward") {
+			prefix = "1:"
+		}
+
+		finalValue := prefix + display
+		label := f.label + ":"
+
 		if i == m.cursor {
-			sb.WriteString(fmt.Sprintf("%s\033[1m%-20s\033[0m \033[36m%s\033[0m\n", cursor, f.label+":", display))
+			paddedLabel := fmt.Sprintf("%-22s", label)
+			sb.WriteString(fmt.Sprintf("%s\033[1m%s\033[0m \033[36m%s\033[0m\n",
+				cursor, paddedLabel, finalValue))
 		} else {
-			sb.WriteString(fmt.Sprintf("%s%-20s %s\n", cursor, f.label+":", display))
+			sb.WriteString(fmt.Sprintf("%s%-22s %s\n",
+				cursor, label, finalValue))
 		}
 	}
 
@@ -350,18 +391,22 @@ func main() {
 	typicalRisk := m.getFloat(3, 0.05)
 	riskReward := m.getFloat(4, 1.0)
 	winRate := m.getFloat(5, 0.58)
+	maxRisk := m.getFloat(6, 50000) // The maximum amount of money per trade limited by liquidity
+	slip := m.getFloat(7, 0.005)    // Difference between the expected price and the real price for a trade (influenced by spreads, volatility, volume, ...)
 
 	fmt.Println("\n=== Configuration ===")
-	fmt.Printf("Start Balance:    %.2f\n", startBalance)
+	fmt.Printf("Start Balance:    %.2f$\n", startBalance)
 	fmt.Printf("Number of Trades: %d\n", numberOfTrades)
 	fmt.Printf("Simulations:      %d\n", numSimulations)
 	fmt.Printf("Typical Risk:     %.4f\n", typicalRisk)
 	fmt.Printf("Risk-Reward:      1:%.1f\n", riskReward)
 	fmt.Printf("Win Rate:         %.4f\n", winRate)
+	fmt.Printf("Max Risk:         %.2f$\n", maxRisk)
+	fmt.Printf("Slippage:         %.4f\n", slip)
 	fmt.Printf("Break-Even WR:    %.4f\n", breakEvenWinRate(typicalRisk, riskReward))
 
-	percentileChart := percentile(startBalance, numberOfTrades, numSimulations, typicalRisk, riskReward, winRate)
-	monteCarloChart := monteCarlo(startBalance, numberOfTrades, numSimulations, typicalRisk, riskReward, winRate)
+	percentileChart := percentile(startBalance, numberOfTrades, numSimulations, typicalRisk, riskReward, winRate, maxRisk, slip)
+	monteCarloChart := monteCarlo(startBalance, numberOfTrades, numSimulations, typicalRisk, riskReward, winRate, maxRisk, slip)
 
 	page := components.NewPage()
 	page.PageTitle = "Trade Simulator"
